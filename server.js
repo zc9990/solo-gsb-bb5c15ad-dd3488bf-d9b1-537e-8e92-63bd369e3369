@@ -10,6 +10,7 @@ const {
   diffReplays,
 } = require('./replay');
 const { computeAssignments } = require('./assignment');
+const { computeRotation } = require('./rotation');
 
 const app = express();
 app.use(express.json());
@@ -57,7 +58,9 @@ function loadState() {
   const replayResult = replay(locations, props, cues);
   // 岗位表以最新重放结果 + 最新人员资格实时重算，不落地存储
   const assignments = computeAssignments(cues, replayResult.results, staff);
-  return { locations, props, cues, replay: replayResult, staff, assignments };
+  // 连场轮换排班：对整场全部生效提示联合求解（相邻生效提示人员不重复），同样实时重算
+  const rotation = computeRotation(cues, replayResult.results, staff);
+  return { locations, props, cues, replay: replayResult, staff, assignments, rotation };
 }
 
 function ok(res) {
@@ -547,6 +550,17 @@ app.get('/api/assignments', (req, res) => {
     skipped: assignments.filter((a) => a.status === 'skipped').length,
   };
   res.json({ assignments, summary });
+});
+
+/* ---------- 连场轮换排班（整场联合求解查询 API） ----------
+ * 仅纳入全量重放生效的提示（失败提示不计轮次）；每条转移须由具备资格的
+ * 人员承担、同组每人一岗，且同一人员不得出现在相邻两条生效提示中。
+ * 无法覆盖全场时返回首个无法形成可行前缀的提示号及其前一条生效提示号，
+ * 不输出部分岗位表。人员、资格或提示变化后实时重算，不落地存储。
+ */
+app.get('/api/rotation', (req, res) => {
+  const { rotation } = loadState();
+  res.json(rotation);
 });
 
 /* ---------- 启动 ---------- */

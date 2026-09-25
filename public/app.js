@@ -221,6 +221,7 @@ function render() {
   renderSimForm();
   renderStaff();
   renderAssignments();
+  renderRotation();
 }
 
 /* ---------- 换景人员与逐提示岗位表 ---------- */
@@ -360,6 +361,145 @@ function renderAssignments() {
         </div>`;
     })
     .join('');
+}
+
+/* ---------- 连场轮换排班（整场联合求解） ---------- */
+
+function effectiveSequenceHtml(rot, blockNumber) {
+  const nums = rot.effectiveCueNumbers || [];
+  if (!nums.length) return '';
+  const skipped = rot.skippedCueCount || 0;
+  const items = nums.map((n, i) => {
+    const hit = n === blockNumber;
+    return `<span class="rt-node${hit ? ' block' : ''}">轮${i + 1} · 提示 ${esc(n)}${hit ? ' ✗' : ''}</span>`;
+  });
+  return `
+    <div class="rt-seq">
+      <span class="rt-seq-label">生效提示连场轮次</span>
+      ${items.join('<span class="rt-sep">→</span>')}
+      ${skipped ? `<span class="rt-skip-note">（另有 ${skipped} 条失败提示不计轮次）</span>` : ''}
+    </div>`;
+}
+
+function renderRotation() {
+  const rot = state.rotation;
+  const summaryEl = $('#rotation-summary');
+  const panel = $('#rotation-panel');
+  if (!rot) {
+    summaryEl.textContent = '';
+    panel.innerHTML = '';
+    return;
+  }
+
+  summaryEl.innerHTML =
+    `整场共 <strong>${rot.summary.effectiveCues}</strong> 条生效提示参与连场排班` +
+    (rot.summary.skippedCues ? `，<span class="sum-skip">${rot.summary.skippedCues} 条失败提示不计轮次</span>` : '') +
+    `，在册人员 ${rot.summary.staff} 名。`;
+
+  /* 无生效提示 */
+  if (rot.status === 'empty') {
+    panel.innerHTML = `
+      ${effectiveSequenceHtml(rot)}
+      <p class="hint">当前没有任何整组生效的提示，无需连场排班（失败提示不纳入轮次）。</p>`;
+    return;
+  }
+
+  /* 枚举规模超限（异常大数据量的防御分支） */
+  if (rot.status === 'limited') {
+    panel.innerHTML = `
+      ${effectiveSequenceHtml(rot)}
+      <div class="rt-blocked">
+        <div class="rt-block-title">⚠️ 连场排班未计算</div>
+        <p>${esc(rot.limited.message)}</p>
+      </div>`;
+    return;
+  }
+
+  /* 无法覆盖全场：只报首个无法形成可行前缀的提示号与前一条生效提示号，不输出部分岗位表 */
+  if (rot.status === 'blocked') {
+    const b = rot.block;
+    const prevText = b.previousEffectiveCue === null
+      ? '<strong>无</strong>（该提示就是第一条生效提示）'
+      : `提示 <strong>${b.previousEffectiveCue}</strong>`;
+    const reason = b.reason === 'understaffed'
+      ? `提示 ${b.number} 需 ${b.transferCount} 个同时执行的岗位，无法仅由具备资格的人员整组覆盖（本组单独就没有完整匹配）。可在右侧「⑧ 逐提示岗位表」中查看该组的<strong>资格瓶颈诊断</strong>，补充人员或授予资格后将自动重算。`
+      : `提示 ${b.number} <strong>单独可以排开</strong>（有 ${b.soloFeasible} 种合法动用方案），但与排到提示 ${b.previousEffectiveCue} 的任意合法分配都必然让同一人员连场出场（相邻两条生效提示不得同人）；系统已允许回头调整前序各提示的合法分配，仍找不到覆盖到该提示的可行前缀（兼容方案 ${b.compatibleWithPrevious} 种）。`;
+    panel.innerHTML = `
+      ${effectiveSequenceHtml(rot, b.number)}
+      <div class="rt-blocked">
+        <div class="rt-block-title">✗ 无法对整场形成可行连场排班</div>
+        <ul class="rt-block-lines">
+          <li>首个无法形成可行前缀的提示号：<strong class="rt-num">${b.number}</strong></li>
+          <li>其前一条生效提示号：${prevText}</li>
+        </ul>
+        <p>${reason}</p>
+        <p class="hint">按规则<strong>不输出部分岗位表</strong>——请在 ⑦ 中调整人员或搬运资格（或修改提示内容），排班将随最新数据实时重算。</p>
+      </div>`;
+    return;
+  }
+
+  /* 全场可行：逐轮岗位表 + 整场人员通览矩阵 */
+  const roundCards = rot.rounds
+    .map((r) => {
+      const rows = r.positions
+        .map((p, i) => `
+          <tr>
+            <td>${i + 1}</td>
+            <td>${esc(p.prop)}</td>
+            <td>${esc(p.from)} <span class="arrow">→</span> ${esc(p.to)}</td>
+            <td><strong>${esc(p.staff)}</strong></td>
+          </tr>`)
+        .join('');
+      return `
+        <div class="cue-item ok rt-round">
+          <div class="cue-head">
+            <span class="num">轮次 ${r.round} · 提示 ${r.number}</span>
+            <span class="note">${esc(r.note || '')}</span>
+            <span class="badge ok">✓ ${r.positions.length} 岗 · ${r.usedStaff.map((s) => esc(s)).join('、')}</span>
+          </div>
+          <table class="table assign-table">
+            <thead><tr><th>岗位</th><th>道具</th><th>转移</th><th>担当</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    })
+    .join('');
+
+  // 整场人员通览：行 = 人员，列 = 连场轮次；格内为该人员本轮搬运的道具
+  const headCells = rot.rounds
+    .map((r) => `<th title="${esc(r.note || '')}">轮${r.round}<br /><span class="rt-cue-no">提示 ${r.number}</span></th>`)
+    .join('');
+  const bodyRows = rot.roster
+    .map((row) => {
+      const byRound = new Map(row.appearances.map((a) => [a.round, a]));
+      const cells = rot.rounds
+        .map((r) => {
+          const a = byRound.get(r.round);
+          if (!a) return '<td class="rt-off">·</td>';
+          const detail = a.positions.map((p) => `${p.prop}：${p.from} → ${p.to}`).join('\n');
+          return `<td class="rt-on" title="${esc(detail)}">${a.positions.map((p) => esc(p.prop)).join('<br />')}</td>`;
+        })
+        .join('');
+      return `
+        <tr>
+          <th class="rt-staff">${esc(row.staff)}<span class="rt-total">${row.positionCount} 岗</span></th>
+          ${cells}
+        </tr>`;
+    })
+    .join('');
+
+  panel.innerHTML = `
+    ${effectiveSequenceHtml(rot)}
+    <div class="rt-ok-banner">✓ 整场 ${rot.rounds.length} 条生效提示均可连场轮换，共动用 ${rot.summary.usedStaff} 名人员；相邻两轮无同一人员出场。</div>
+    <h3>逐轮岗位表（联合求解结果，可能已对前序提示的合法分配做出调整）</h3>
+    <div id="rotation-rounds">${roundCards}</div>
+    <h3>整场人员安排（行 = 人员，列 = 连场轮次；鼠标悬停格子查看转移明细）</h3>
+    <div class="rt-matrix-wrap">
+      <table class="table rt-matrix">
+        <thead><tr><th class="rt-staff">人员 ＼ 轮次</th>${headCells}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </div>`;
 }
 
 /* ---------- 事件 ---------- */
