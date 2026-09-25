@@ -10,6 +10,7 @@ const {
   diffReplays,
 } = require('./replay');
 const { computeAssignments } = require('./assignment');
+const { computeRotation } = require('./rotation');
 
 const app = express();
 app.use(express.json());
@@ -55,9 +56,10 @@ function loadState() {
   const { locations, props, cues } = loadBaseData();
   const staff = loadStaff();
   const replayResult = replay(locations, props, cues);
-  // 岗位表以最新重放结果 + 最新人员资格实时重算，不落地存储
+  // 岗位表与连场轮换排班均以最新重放结果 + 最新人员资格实时重算，不落地存储
   const assignments = computeAssignments(cues, replayResult.results, staff);
-  return { locations, props, cues, replay: replayResult, staff, assignments };
+  const rotation = computeRotation(cues, replayResult.results, staff);
+  return { locations, props, cues, replay: replayResult, staff, assignments, rotation };
 }
 
 function ok(res) {
@@ -547,6 +549,23 @@ app.get('/api/assignments', (req, res) => {
     skipped: assignments.filter((a) => a.status === 'skipped').length,
   };
   res.json({ assignments, summary });
+});
+
+/* ---------- 连场轮换排班 ----------
+ * 仅纳入全量重放生效的提示（失败提示不计轮次），对整场联合求解：
+ * 同一人员不得出现在相邻两条生效提示中，允许回溯调整前序提示的合法分配。
+ * 以最新重放结果与最新人员资格实时重算（与 /api/state 中的 rotation 一致）。
+ */
+app.get('/api/rotation', (req, res) => {
+  const { rotation } = loadState();
+  const summary = {
+    status: rotation.status,
+    effectiveCues: rotation.effectiveCount,
+    skippedCues: rotation.skippedCount,
+    positions: rotation.rounds.reduce((sum, r) => sum + r.positions.length, 0),
+    staffUsed: new Set(rotation.rounds.flatMap((r) => r.positions.map((p) => p.staff))).size,
+  };
+  res.json({ rotation, summary });
 });
 
 /* ---------- 启动 ---------- */

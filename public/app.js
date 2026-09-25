@@ -221,6 +221,7 @@ function render() {
   renderSimForm();
   renderStaff();
   renderAssignments();
+  renderRotation();
 }
 
 /* ---------- 换景人员与逐提示岗位表 ---------- */
@@ -352,6 +353,85 @@ function renderAssignments() {
             <span class="num">提示 ${a.number}</span>
             <span class="note">${esc(a.note || '')}</span>
             <span class="badge ok">✓ 人员齐备（${a.positions.length} 岗）</span>
+          </div>
+          <table class="table assign-table">
+            <thead><tr><th>岗位</th><th>道具</th><th>转移</th><th>担当</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    })
+    .join('');
+}
+
+/* ---------- 连场轮换排班（整场联合求解，失败提示不计轮次） ---------- */
+
+function renderRotation() {
+  const rot = state.rotation || {
+    status: 'empty', effectiveCount: 0, skippedCount: 0, rounds: [], failure: null,
+  };
+  const skipNote = rot.skippedCount ? `（另有 ${rot.skippedCount} 条未生效提示不计轮次）` : '';
+
+  if (rot.status === 'ok') {
+    const positions = rot.rounds.reduce((s, r) => s + r.positions.length, 0);
+    const used = new Set(rot.rounds.flatMap((r) => r.positions.map((p) => p.staff))).size;
+    $('#rotation-summary').innerHTML =
+      `<span class="sum-ok">✓ 整场可排</span>：${rot.effectiveCount} 条生效提示 · ` +
+      `${positions} 个岗位 · ${used} 名人员参与${skipNote}`;
+  } else if (rot.status === 'infeasible') {
+    $('#rotation-summary').innerHTML =
+      `<span class="sum-lack">✗ 无法全覆盖</span>：${rot.effectiveCount} 条生效提示存在排班断点${skipNote}`;
+  } else {
+    $('#rotation-summary').textContent = rot.skippedCount
+      ? `全部 ${rot.skippedCount} 条提示均未生效，没有需要排班的轮次。`
+      : '暂无生效提示，没有需要排班的轮次。';
+  }
+
+  const box = $('#rotation-list');
+  if (rot.status === 'empty') {
+    box.innerHTML = '<p class="hint">录入提示并使其整组生效后，这里会生成整场轮换排班。</p>';
+    return;
+  }
+
+  if (rot.status === 'infeasible') {
+    // 不输出部分岗位表：只报告首个无法形成可行前缀的提示及其前一条生效提示
+    const f = rot.failure;
+    const prevText = f.previousNumber === null
+      ? '无 —— 这是第一条生效提示，单组即无法配齐具备资格的人员'
+      : `提示 ${f.previousNumber}${f.previousNote ? `（${esc(f.previousNote)}）` : ''}`;
+    box.innerHTML = `
+      <div class="cue-item fail">
+        <div class="cue-head">
+          <span class="num">提示 ${f.number}</span>
+          <span class="note">${esc(f.note || '')}</span>
+          <span class="badge fail">✗ 无法形成可行前缀</span>
+        </div>
+        <ul class="cue-errors">
+          <li>提示 ${f.number} 是首个无法形成可行前缀的生效提示（需 ${f.transferCount} 个同时执行的岗位）：无论此前 ${f.feasiblePrefixCount} 条生效提示如何合法分配，都无法在「相邻两条生效提示不用同一人员」的约束下为本组配齐具备资格的人员。</li>
+          <li>其前一条生效提示：${prevText}</li>
+        </ul>
+        <p class="hint">按规则不输出部分岗位表 —— 请在 ⑦ 中补充人员或调整搬运资格，或调整提示内容，整场排班将自动重算。</p>
+      </div>`;
+    return;
+  }
+
+  // 整场可排：逐轮列出完整岗位表（轮次 = 生效提示序号，相邻轮次人员不重复）
+  box.innerHTML = rot.rounds
+    .map((r, i) => {
+      const rows = r.positions
+        .map((p, pi) => `
+          <tr>
+            <td>${pi + 1}</td>
+            <td>${esc(p.prop)}</td>
+            <td>${esc(p.from)} <span class="arrow">→</span> ${esc(p.to)}</td>
+            <td><strong>${esc(p.staff)}</strong></td>
+          </tr>`)
+        .join('');
+      return `
+        <div class="cue-item ok">
+          <div class="cue-head">
+            <span class="num">第 ${i + 1} 轮 · 提示 ${r.number}</span>
+            <span class="note">${esc(r.note || '')}</span>
+            <span class="badge ok">✓ ${r.positions.length} 岗</span>
           </div>
           <table class="table assign-table">
             <thead><tr><th>岗位</th><th>道具</th><th>转移</th><th>担当</th></tr></thead>

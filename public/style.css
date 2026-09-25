@@ -275,9 +275,12 @@ button:disabled { opacity: .55; cursor: wait; }
   border: 1px solid var(--muted);
 }
 .assign-table { margin: 8px 0 0; }
-#assignment-summary .sum-ok { color: var(--ok); }
-#assignment-summary .sum-lack { color: var(--err); }
-#assignment-summary .sum-skip { color: var(--muted); }
+#assignment-summary .sum-ok, #rotation-summary .sum-ok { color: var(--ok); }
+#assignment-summary .sum-lack, #rotation-summary .sum-lack { color: var(--err); }
+#assignment-summary .sum-skip, #rotation-summary .sum-skip { color: var(--muted); }
+
+/* 连场轮换排班：与人员、逐提示岗位表同排三栏（窄屏自动换行） */
+.row.trio .card { flex-basis: 360px; }
 
 /* 资格瓶颈诊断 */
 .bottleneck {

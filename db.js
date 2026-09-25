@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS staff_quals (
 `);
 
 // 首次启动时写入示例数据（区位 / 道具 / 人员 / 四条提示：30 号故意与 20 号冲突演示整组不生效，
-// 40 号故意让两件道具只能由同一人搬运，演示岗位匹配的人手不足）
+// 40 号故意让两件道具只能由同一人搬运，演示岗位匹配的人手不足；连场轮换排班也会因此在 40 号
+// 报告「首个无法形成可行前缀的提示」，其前一条生效提示为 20 号）
 function seed() {
   const { c } = db.prepare('SELECT COUNT(*) AS c FROM locations').get();
   if (c > 0) return;
